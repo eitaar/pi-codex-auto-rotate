@@ -1,0 +1,25 @@
+{
+  "name": "pi-codex-auto-rotate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Automatic Codex account failover companion for pi-codex-account",
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "latest",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}

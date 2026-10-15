@@ -1,0 +1,7 @@
+node_modules/
+*.tsbuildinfo
+codex-accounts.json
+codex-auto-rotate-state.json
+codex-auto-rotate-config.json
+auth.json
+*.log
