@@ -1,7 +1,7 @@
 /** Automatic Codex quota failover for users of pi-codex-account.
  * Pi >= 1.2; respects the existing /codex account store and command namespace.
  */
-import { AuthStorage, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readStoredCredential, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -71,14 +71,30 @@ function readState(): RotationState {
 }
 
 async function activeCredential(): Promise<CodexCredential | undefined> {
-  const item = await AuthStorage.create(authPath()).read(PROVIDER);
+  // AuthStorage is internal to Pi. Only readStoredCredential is exported
+  // from @earendil-works/pi-coding-agent's public entry point.
+  const item = readStoredCredential(PROVIDER, authPath());
   return isCredential(item) ? item : undefined;
 }
 
-/** Use Pi's own lock-aware credential API, not a racy rewrite of auth.json. */
+/** Persist a new active credential while preserving every other provider. */
 async function activate(credential: CodexCredential): Promise<void> {
-  const storage = AuthStorage.create(authPath());
-  await storage.modify(PROVIDER, async () => ({ ...credential, type: "oauth", expires: 0 }));
+  // Fail closed: do not silently create an empty auth.json if it is missing
+  // or malformed. The existing pi-codex-account extension uses the same
+  // on-disk auth.json format.
+  const auth = readJson<unknown>(authPath(), null);
+  if (!auth || typeof auth !== "object" || Array.isArray(auth)) {
+    throw new Error("Invalid or missing auth.json; no credentials were changed");
+  }
+  const entries = auth as Record<string, unknown>;
+  if (!isCredential(entries[PROVIDER])) {
+    throw new Error("No active openai-codex OAuth credential; no credentials were changed");
+  }
+  // Expire the snapshot so Pi refreshes with the selected account's token.
+  writeSecure(authPath(), {
+    ...entries,
+    [PROVIDER]: { ...credential, type: "oauth", expires: 0 },
+  });
 }
 
 /** Save the newest active OAuth token before switching, as /codex switch does. */

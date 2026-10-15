@@ -98,3 +98,22 @@ test('manual /codex-auto next reloads, toggle disables automatic switching', asy
     assert.equal(getReloads(),1);
   });
 });
+
+// Regression: Pi does not export the AuthStorage class. The extension must
+// work with only the public readStoredCredential() helper available.
+test('status works without importing the internal AuthStorage class', async () => {
+  await withExtension(async ({ commands, ctx, notices }) => {
+    await commands.get('codex-auto').handler('status', ctx);
+    assert.match(notices.at(-1).txt, /active=alpha/);
+    assert.doesNotMatch(notices.at(-1).txt, /Cannot read properties of undefined/);
+  });
+});
+
+test('corrupt auth.json is not overwritten during a manual rotation', async () => {
+  await withExtension(async ({ commands, ctx, authPath, notices }) => {
+    writeFileSync(authPath, '{not valid JSON');
+    await commands.get('codex-auto').handler('next', ctx);
+    assert.equal(readFileSync(authPath, 'utf8'), '{not valid JSON');
+    assert.ok(notices.some(n => /Switch failed|No unused|No active/.test(n.txt)));
+  });
+});

@@ -4,7 +4,7 @@ Experimental automatic Codex account failover extension for [Pi](https://github.
 
 It reads the existing `codex-accounts.json` file. When an `openai-codex` request fails with a recognized quota/rate-limit error, it selects the next eligible saved account, records a cooldown, and attempts to continue the interrupted request. It **does not** log into or create additional accounts.
 
-> **Prototype warning:** 12 local mocked tests passed with Node 22. Real Codex/Pi integration and TypeScript type-checking have not yet been verified. Back up your credentials before trying it, and follow your provider's terms and usage limits.
+> **Prototype warning:** 14 local mocked tests passed with Node 22. Real Codex/Pi integration and TypeScript type-checking have not yet been verified. Back up your credentials before trying it, and follow your provider's terms and usage limits.
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ pi -e .
 - The saved account selection follows JSON insertion order and wraps around.
 - An exhausted account cools down until the usage endpoint's reported reset, or for 30 minutes when that cannot be determined.
 - A single task cascade attempts each label at most once, avoiding endless retries. If none remains, the task stops.
-- The extension modifies the active `openai-codex` OAuth entry in `auth.json` using Pi's `AuthStorage` API, leaving unrelated providers untouched.
+- The extension modifies the active `openai-codex` OAuth entry in `auth.json` using Pi's public `readStoredCredential()` helper for reads and an atomic file replacement for writes, leaving unrelated providers untouched.
 - Pi's built-in retry may resolve the error after credential switching. Otherwise, `agent_before_settle` can append a context edit omitting only the failed assistant attempt, followed by an invisible handoff note so the agent can continue without replaying completed tool calls. Whether resumption succeeds depends on the Pi runtime version.
 - No background polling and no automatic account creation.
 
@@ -85,7 +85,17 @@ npm test
 npm run typecheck
 ```
 
-Tests cover parsing, cooldown selection, rotation, native retry interaction and continuation drafts with a mocked Pi API. Live usage-limit/OAuth integration has not been tested.
+Tests cover parsing, cooldown selection, rotation, native retry interaction and continuation drafts with a mocked Pi API. The real Pi credential module and live OAuth behavior are not exercised by these tests. Live usage-limit/OAuth integration has not been tested.
+
+## Troubleshooting
+
+If an older install reports `Cannot read properties of undefined (reading 'create')`, update to v0.1.1 or newer. The initial implementation incorrectly imported Pi's internal `AuthStorage` class from the public package entry point; this version uses the publicly exported `readStoredCredential()` helper.
+
+```powershell
+pi update --extensions
+```
+
+Restart Pi (or use `/reload`) and run `/codex-auto status` again.
 
 ## License
 
