@@ -139,9 +139,9 @@ test('bounded cycle wraps to recovered first account, then stops at configured m
     assert.equal(json(authPath)['openai-codex'].accountId,'a');
     assert.equal(await failAndSettle('four'),undefined);
     assert.equal(json(authPath)['openai-codex'].accountId,'a');
-    assert.ok(notices.some(n=>/automatic switch limit \\(3\\)/.test(n.txt)));
+    assert.ok(notices.some(n=>/automatic switch limit [(]3[)]/.test(n.txt)));
     await cmd('status',ctx);
-    assert.match(notices.at(-1).txt,/switches=3\\/3/);
+    assert.match(notices.at(-1).txt,/switches=3[/]3/);
   });
 });
 
@@ -149,7 +149,7 @@ test('max command rejects invalid values and persists settings', async () => {
   await withExtension(async ({ dir, commands, ctx, notices }) => {
     const cmd=commands.get('codex-auto').handler;
     await cmd('status',ctx);
-    assert.match(notices.at(-1).txt,/switches=0\\/8/);
+    assert.match(notices.at(-1).txt,/switches=0[/]8/);
     for (const value of ['0','101','-1','1.5','NaN','abc']) await cmd('max '+value,ctx);
     assert.equal(fileExists(join(dir,'codex-auto-rotate-config.json')),false);
     await cmd('max 12',ctx);
@@ -165,9 +165,9 @@ test('new user prompt resets switch budget; a successful response does not', asy
     await handlers.get('turn_end')(fail('one'),ctx);
     await handlers.get('turn_end')({message:{role:'assistant',stopReason:'stop'}},ctx);
     await cmd('status',ctx);
-    assert.match(notices.at(-1).txt,/switches=1\\/1/);
+    assert.match(notices.at(-1).txt,/switches=1[/]1/);
     await handlers.get('before_agent_start')({messageType:'user'});
     await cmd('status',ctx);
-    assert.match(notices.at(-1).txt,/switches=0\\/1/);
+    assert.match(notices.at(-1).txt,/switches=0[/]1/);
   });
 });
