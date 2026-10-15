@@ -21,14 +21,14 @@ test('only known usage-limit errors trigger failover', () => {
   }
 });
 test('next account follows save order and wraps', () => {
-  assert.equal(nextAccount(store, 'alpha', {}, new Set()), 'beta');
-  assert.equal(nextAccount(store, 'gamma', {}, new Set()), 'alpha');
-  assert.equal(nextAccount(store, 'alpha', {}, new Set(['beta'])), 'gamma');
+  assert.equal(nextAccount(store, 'alpha', {}), 'beta');
+  assert.equal(nextAccount(store, 'gamma', {}), 'alpha');
+  assert.equal(nextAccount(store, 'alpha', {beta: Date.now()+10000}), 'gamma');
 });
-test('cooldown and attempt budget prevent a retry loop', () => {
+test('cooldown prevents selecting unavailable accounts', () => {
   const now = 1000;
-  assert.equal(nextAccount(store, 'alpha', { beta: 2000 }, new Set(), now), 'gamma');
-  assert.equal(nextAccount(store, 'alpha', { beta: 2000 }, new Set(['gamma']), now), undefined);
+  assert.equal(nextAccount(store, 'alpha', { beta: 2000 }, now), 'gamma');
+  assert.equal(nextAccount(store, 'alpha', { beta: 2000, gamma: 2000 }, now), undefined);
 });
 test('active account is identified from OAuth identity not stale store.active', () => {
   assert.equal(findActiveLabel(store, { ...cred('b'), refresh: 'refreshed-token' }), 'beta');
@@ -37,7 +37,7 @@ test('active account is identified from OAuth identity not stale store.active', 
 test('duplicate account identities are not selected for failover', () => {
   const duplicate = structuredClone(store);
   duplicate.accounts.beta.credential = cred('a');
-  assert.equal(nextAccount(duplicate, 'alpha', {}, new Set()), 'gamma');
+  assert.equal(nextAccount(duplicate, 'alpha', {}), 'gamma');
 });
 test('weekly and 5h windows: latest exhausted window wins', () => {
   const now = 1_000_000;
@@ -50,4 +50,10 @@ test('weekly and 5h windows: latest exhausted window wins', () => {
 test('expired cooldowns are removed', () => {
   const state = pruneCooldowns({cooldownUntil:{a:123,b:456}},300);
   assert.deepEqual(state.cooldownUntil,{b:456});
+});
+
+test('expired cooldown makes wrapped account eligible again', () => {
+  assert.equal(nextAccount(store, 'gamma', {alpha: 2000}, 1000), 'beta');
+  assert.equal(nextAccount(store, 'gamma', {alpha: 2000, beta: 3000}, 1000), undefined);
+  assert.equal(nextAccount(store, 'gamma', {alpha: 2000, beta: 3000}, 2100), 'alpha');
 });

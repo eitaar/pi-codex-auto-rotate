@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const base = dirname(fileURLToPath(import.meta.url));
 const c = (id) => ({ type: 'oauth', access: `access-${id}`, refresh: `refresh-${id}`, expires: 9999999999999, accountId: id });
 const json = (p) => JSON.parse(readFileSync(p, 'utf8'));
+const fileExists = (p) => { try { readFileSync(p, 'utf8'); return true; } catch(e) { if(e.code === 'ENOENT') return false; throw e; } };
 
 async function withExtension(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'codex-auto-test-'));
@@ -115,5 +116,58 @@ test('corrupt auth.json is not overwritten during a manual rotation', async () =
     await commands.get('codex-auto').handler('next', ctx);
     assert.equal(readFileSync(authPath, 'utf8'), '{not valid JSON');
     assert.ok(notices.some(n => /Switch failed|No unused|No active/.test(n.txt)));
+  });
+});
+
+test('bounded cycle wraps to recovered first account, then stops at configured max', async () => {
+  await withExtension(async ({ dir, handlers, commands, ctx, fail, authPath, notices }) => {
+    const cmd=commands.get('codex-auto').handler;
+    await cmd('max 3',ctx);
+    const failAndSettle=async (id)=>{
+      await handlers.get('turn_end')(fail(id),ctx);
+      return handlers.get('agent_before_settle')({ outcome:'error', context:{ contextMessages:[{role:'user'}] } },ctx);
+    };
+    assert.equal((await failAndSettle('one')).continue, true);
+    assert.equal(json(authPath)['openai-codex'].accountId,'b');
+    assert.equal((await failAndSettle('two')).continue, true);
+    assert.equal(json(authPath)['openai-codex'].accountId,'c');
+    const statePath=join(dir,'codex-auto-rotate-state.json');
+    const state=json(statePath);
+    state.cooldownUntil.alpha=Date.now()-1000;
+    writeFileSync(statePath, JSON.stringify(state));
+    assert.equal((await failAndSettle('three')).continue,true);
+    assert.equal(json(authPath)['openai-codex'].accountId,'a');
+    assert.equal(await failAndSettle('four'),undefined);
+    assert.equal(json(authPath)['openai-codex'].accountId,'a');
+    assert.ok(notices.some(n=>/automatic switch limit \\(3\\)/.test(n.txt)));
+    await cmd('status',ctx);
+    assert.match(notices.at(-1).txt,/switches=3\\/3/);
+  });
+});
+
+test('max command rejects invalid values and persists settings', async () => {
+  await withExtension(async ({ dir, commands, ctx, notices }) => {
+    const cmd=commands.get('codex-auto').handler;
+    await cmd('status',ctx);
+    assert.match(notices.at(-1).txt,/switches=0\\/8/);
+    for (const value of ['0','101','-1','1.5','NaN','abc']) await cmd('max '+value,ctx);
+    assert.equal(fileExists(join(dir,'codex-auto-rotate-config.json')),false);
+    await cmd('max 12',ctx);
+    assert.equal(json(join(dir,'codex-auto-rotate-config.json')).maxSwitchesPerTask,12);
+  });
+});
+
+test('new user prompt resets switch budget; a successful response does not', async () => {
+  await withExtension(async ({ handlers, commands, ctx, fail, notices }) => {
+    const cmd=commands.get('codex-auto').handler;
+    await cmd('max 1',ctx);
+    await handlers.get('before_agent_start')({messageType:'user'});
+    await handlers.get('turn_end')(fail('one'),ctx);
+    await handlers.get('turn_end')({message:{role:'assistant',stopReason:'stop'}},ctx);
+    await cmd('status',ctx);
+    assert.match(notices.at(-1).txt,/switches=1\\/1/);
+    await handlers.get('before_agent_start')({messageType:'user'});
+    await cmd('status',ctx);
+    assert.match(notices.at(-1).txt,/switches=0\\/1/);
   });
 });

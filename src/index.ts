@@ -61,6 +61,9 @@ function readConfig(): RotationConfig {
     fallbackCooldownMinutes: typeof value.fallbackCooldownMinutes === "number" &&
       value.fallbackCooldownMinutes >= 1 && value.fallbackCooldownMinutes <= 10080
       ? value.fallbackCooldownMinutes : DEFAULT_CONFIG.fallbackCooldownMinutes,
+    maxSwitchesPerTask: Number.isInteger(value.maxSwitchesPerTask) &&
+      value.maxSwitchesPerTask! >= 1 && value.maxSwitchesPerTask! <= 100
+      ? value.maxSwitchesPerTask! : DEFAULT_CONFIG.maxSwitchesPerTask,
   };
 }
 function readState(): RotationState {
@@ -122,8 +125,8 @@ async function determineCooldown(credential: CodexCredential | undefined, fallba
 }
 
 export default function (pi: ExtensionAPI): void {
-  /** Bound to one live user task; don't attempt the same account twice in a cascade. */
-  let attempted = new Set<string>();
+  /** In-memory counter for a single user task; only a new user request resets it. */
+  let automaticSwitches = 0;
   let pendingFailure: { entryId: string; switched: boolean } | undefined;
   let switching = false;
 
@@ -141,14 +144,20 @@ export default function (pi: ExtensionAPI): void {
       const state = readState();
       const config = readConfig();
       if (cause === "limit" && from) {
-        attempted.add(from);
-        // Record a conservative fallback first; the API may give a more precise reset time.
+        // Track the exhausted account even if we already hit the switch cap.
         state.cooldownUntil[from] = await determineCooldown(current, config.fallbackCooldownMinutes);
       }
-      const to = nextAccount(store, from, state.cooldownUntil, attempted);
+      if (cause === "limit" && automaticSwitches >= config.maxSwitchesPerTask) {
+        writeSecure(statePath(), state);
+        notify(`Reached the automatic switch limit (${config.maxSwitchesPerTask}) for this task. Stopping.`, "warning", ctx);
+        return false;
+      }
+      // Wrap to the beginning if the first account has recovered. Never
+      // choose an account still on cooldown.
+      const to = nextAccount(store, from, state.cooldownUntil);
       if (!to) {
         writeSecure(statePath(), state);
-        notify("No unused available saved account. Stopping rather than retrying in a loop.", "warning", ctx);
+        notify("No other saved account is available (all cooling down or missing). Stopping.", "warning", ctx);
         return false;
       }
       const credential = store.accounts[to]?.credential;
@@ -159,10 +168,10 @@ export default function (pi: ExtensionAPI): void {
       store.accounts[to]!.lastUsedAt = Date.now();
       store.active = to;
       writeSecure(storePath(), store);
-      attempted.add(to);
+      if (cause === "limit") automaticSwitches++;
       state.lastSwitch = { from: from ?? "(unsaved)", to, at: Date.now() };
       writeSecure(statePath(), state);
-      notify(`${from ?? "(unsaved)"} → ${to}${cause === "limit" ? " (usage limit)" : ""}`, "info", ctx);
+      notify(`${from ?? "(unsaved)"} → ${to}${cause === "limit" ? ` (usage limit; switch ${automaticSwitches}/${config.maxSwitchesPerTask})` : ""}`, "info", ctx);
       return true;
     } catch (error) {
       notify(`Switch failed: ${error instanceof Error ? error.message : String(error)}`, "error", ctx);
@@ -175,7 +184,7 @@ export default function (pi: ExtensionAPI): void {
   // New submitted user work resets the attempt budget; an automatic retry does not.
   pi.on("before_agent_start", (event) => {
     if (event.messageType === "user") {
-      attempted = new Set();
+      automaticSwitches = 0;
       pendingFailure = undefined;
     }
   });
@@ -187,7 +196,6 @@ export default function (pi: ExtensionAPI): void {
     if (event.message.stopReason !== "error") {
       if (event.message.stopReason !== "aborted") {
         pendingFailure = undefined;
-        attempted = new Set();
       }
       return;
     }
@@ -222,7 +230,7 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("codex-auto", {
-    description: "Codex account auto-failover: status | on | off | resume on|off | next | reset",
+    description: "Codex account auto-failover: status | on | off | resume on|off | max 1..100 | next | reset",
     handler: async (args, ctx) => {
       try {
         const [command = "status", option] = args.trim().split(/\s+/);
@@ -236,10 +244,20 @@ export default function (pi: ExtensionAPI): void {
           cfg.autoResume = option === "on";
           writeSecure(configPath(), cfg);
           notify(`Automatic continuation ${cfg.autoResume ? "enabled" : "disabled"}.`, "info", ctx);
+        } else if (command === "max") {
+          const parsed = Number(option);
+          if (!option || !/^\d+$/.test(option) || !Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+            notify("Usage: /codex-auto max <1-100>", "warning", ctx);
+          } else {
+            const cfg = readConfig();
+            cfg.maxSwitchesPerTask = parsed;
+            writeSecure(configPath(), cfg);
+            notify(`Maximum automatic switches per user task: ${parsed}.`, "info", ctx);
+          }
         } else if (command === "reset") {
           writeSecure(statePath(), { cooldownUntil: {} } satisfies RotationState);
-          attempted = new Set();
-          notify("Cooldowns and retry-attempt tracking cleared.", "info", ctx);
+          automaticSwitches = 0;
+          notify("Cooldowns and automatic switch counter cleared.", "info", ctx);
         } else if (command === "next") {
           if (await rotate(ctx, "manual")) {
             // Commands, unlike boundary event handlers, are allowed to reload.
@@ -254,9 +272,9 @@ export default function (pi: ExtensionAPI): void {
             const until = state.cooldownUntil[label] ?? 0;
             return `${label === active ? "*" : " "} ${label}${until > Date.now() ? ` — cooling until ${new Date(until).toLocaleString()}` : ""}`;
           });
-          notify(`enabled=${cfg.enabled}, autoResume=${cfg.autoResume}, active=${active}\n${lines.join("\n") || "No saved accounts; use /codex save <label>."}`, "info", ctx);
+          notify(`enabled=${cfg.enabled}, autoResume=${cfg.autoResume}, active=${active}, switches=${automaticSwitches}/${cfg.maxSwitchesPerTask}\n${lines.join("\n") || "No saved accounts; use /codex save <label>."}`, "info", ctx);
         } else {
-          notify("Usage: /codex-auto [status|on|off|resume on|resume off|next|reset]", "warning", ctx);
+          notify("Usage: /codex-auto [status|on|off|resume on|resume off|max <1-100>|next|reset]", "warning", ctx);
         }
       } catch (error) {
         notify(error instanceof Error ? error.message : String(error), "error", ctx);

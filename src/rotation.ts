@@ -24,6 +24,8 @@ export interface RotationConfig {
   enabled: boolean;
   autoResume: boolean;
   fallbackCooldownMinutes: number;
+  /** Maximum automatic account changes within one user task. */
+  maxSwitchesPerTask: number;
 }
 
 export interface RotationState {
@@ -35,6 +37,7 @@ export const DEFAULT_CONFIG: RotationConfig = {
   enabled: true,
   autoResume: true,
   fallbackCooldownMinutes: 30,
+  maxSwitchesPerTask: 8,
 };
 
 export function isCredential(value: unknown): value is CodexCredential {
@@ -67,7 +70,6 @@ export function nextAccount(
   store: AccountsStore,
   activeLabel: string | undefined,
   cooldownUntil: Record<string, number>,
-  attemptedLabels: ReadonlySet<string>,
   now = Date.now(),
 ): string | undefined {
   const labels = Object.entries(store.accounts)
@@ -78,7 +80,7 @@ export function nextAccount(
   const source = activeLabel ? store.accounts[activeLabel]?.credential : undefined;
   for (let i = 1; i <= labels.length; i++) {
     const label = labels[(activePos + i) % labels.length]!;
-    if (label === activeLabel || attemptedLabels.has(label) || (cooldownUntil[label] ?? 0) > now) continue;
+    if (label === activeLabel || (cooldownUntil[label] ?? 0) > now) continue;
     const target = store.accounts[label]?.credential;
     if (!target) continue;
     // Don't rotate between multiple labels that refer to the same OAuth account.
